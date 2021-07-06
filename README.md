@@ -2,7 +2,7 @@
 
 ## Tasks
 [] Find a data set (Satvik) \
-- https://lehd.ces.census.gov/data/
+- https://lehd.ces.census.gov/data/ \
 [] Implement the algorithmic framework \
 [] Forming the sparse representation of the data (Isamu?) \
 [] Design the objective/loss function \
