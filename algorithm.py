@@ -12,7 +12,7 @@ from sys import platform
 
 SAMPLING_RATE = 125
 
-def loadDataSample(nsamples=100, npoints=100000, nperiods=100, seed=42, variation_parm=1):
+def loadDataSample(nsamples=100, npoints=100000, nperiods=100, random_state=42, variation_parm=1):
 	"""
 	DESCRIPTION
 	-----------
@@ -37,12 +37,14 @@ def loadDataSample(nsamples=100, npoints=100000, nperiods=100, seed=42, variatio
 
 	"""
 
-	# seed(42)
+	seed(random_state)
 
 	t = np.linspace(0, nperiods * PI, npoints)
 	x = np.array([np.sin(t) + variation_parm * 0.01 * (random() - 0.5) for _ in range(nsamples)])
 	return x	
 
+# For Ethan:
+tempdir = '/var/folders/jx/16bfc0jx3cb_ygmzkjfmcyv80000gn/T/tmpxqt_vn83'
 
 def loadData(tempdir=None, nsamples=100, npoints=100000):
 	"""
@@ -59,6 +61,11 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 	# 3. return temp file name
 	# 4. open and read the contents of the downloaded file
 	# 5. append to numpy array
+
+	Usage:
+		data, tempdir = loadData()
+		or 
+		data, tempdir = loadData(tempdir)
 
 	PARAMETERS
 	----------
@@ -120,12 +127,11 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 	return data, tempdir
 
 
-def getSegments(data, n=100, ntrain_ponts=1000, mtest_points=200, seed=42):
+def getSegments(data, n=100, ntrain_ponts=1000, ntest_points=200, random_state=42):
 	"""
 	DESCRIPTION
 	-----------
 	Points selected for ntrain_ponts and mtest_points need to be adjacent, but they do not necessarily need to be fetched from the beginning of the file.
-
 
 	PARAMETERS
 	----------
@@ -135,10 +141,8 @@ def getSegments(data, n=100, ntrain_ponts=1000, mtest_points=200, seed=42):
 
 	ntrain_points: int
 		Number of points in training set
-
 	mtest_points: int
 		Number of points in the test set
-
 
 	RETURNS
 	-------
@@ -147,8 +151,20 @@ def getSegments(data, n=100, ntrain_ponts=1000, mtest_points=200, seed=42):
 
 	"""
 
-	x_train = None
-	x_test = None
+	seed(random_state)
+
+	npoints = data.shape[1]
+
+	x_train = np.zeros((0, ntrain_ponts))
+	x_test = np.zeros((0, ntest_points))
+
+	for i in range(n):
+
+		a = int(random() * (npoints - (ntrain_ponts + ntest_points)))
+		b = a + ntrain_ponts
+		c = b + ntest_points
+		x_train = np.vstack([x_train, data[i][a:b]])
+		x_test = np.vstack([x_test, data[i][b:c]])
 
 	return x_train, x_test
 
@@ -273,7 +289,7 @@ def predictForecast(x_train, weights=None):
 	return x_test, weights
 
 
-def runGeneticAlgorithm(data, nsamples=100, ntrain_ponts=1000, mtest_points=200, nchildren=100, nepochs=20, alpha=0.05):
+def runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05):
 	"""
 	DESCRIPTION
 	-----------
@@ -287,9 +303,6 @@ def runGeneticAlgorithm(data, nsamples=100, ntrain_ponts=1000, mtest_points=200,
 	-------
 	
 	"""
-
-	# expect data_segments as a list of tuples containing pandas DataFrames which are all the same length of data between elements the list
-	x_train, x_test = getSegments(data, n=nsamples, ntrain_ponts=ntrain_ponts, mtest_points=mtest_points)
 
 	x_train_sparse = sparseRepresentation(x_train)
 
@@ -332,6 +345,7 @@ def runGeneticAlgorithm(data, nsamples=100, ntrain_ponts=1000, mtest_points=200,
 
 		return weights
 
+
 def main():
 	"""
 	DESCRIPTION
@@ -348,8 +362,9 @@ def main():
 	"""
 
 	# data = loadData()
-	data = loadDataSample()
-	results = runGeneticAlgorithm(data)
+	data, tempfir = loadDataSample(tempdir=None)
+	data_segment = getSegments(data, nsamples=100, ntrain_ponts=1000, ntest_points=200)
+	results = runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05)
 
 
 if __name__ == "__main__":
