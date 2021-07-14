@@ -8,6 +8,8 @@ from os import system
 
 from tempfile import TemporaryDirectory
 
+from sys import platform
+
 SAMPLING_RATE = 125
 
 def loadDataSample(nsamples=100, npoints=100000, nperiods=100, seed=42, variation_parm=1):
@@ -81,9 +83,20 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 
 	if not tempdir:
 		tempdir = TemporaryDirectory().name
-		system("wget -r -N -c -np -P %s https://physionet.org/files/ptbdb/1.0.0/" % tempdir)
+		try:
+			if platform == "win32":
+				system("wsl -r -N -c -np -P %s https://physionet.org/files/ptbdb/1.0.0/" % tempdir)
+			if platform == "darwin":
+				system("wget -r -N -c -np -P %s https://physionet.org/files/ptbdb/1.0.0/" % tempdir)
+			else:
+				print("I don't know what platform you have... Tell Ethan on Slack.")
+				return None, None
+		except Exception as e:
+			print("[%s]:[%s] %s" % __name, __func__, e)
+			print("Make sure if you are on Windows that you have wsl install. If you are on Mac, please install wget.")
+			return None, None
 
-	datadir = tempdir + '/physionet.org/files/ptbdb/1.0.0/'
+	datadir = os.path.join(tempdir, 'physionet.org/files/ptbdb/1.0.0/')
 
 	if not os.path.isdir(datadir):
 		print("The given temporary directory does not contain the downloaded data. Please rerun the function without providing tempdir as an parameter.")
@@ -92,13 +105,13 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 	patientfiles = [e for e in os.listdir(datadir) if 'patient' in e]
 
 	for patientfile in patientfiles:
-		patientdir = datadir + '/' + patientfile
+		patientdir = os.path.join(datadir, patientfile)
 		datafiles = [e for e in os.listdir(patientdir) if '.dat' in e]
 		for datafile in datafiles:
 			if data.shape[0] == nsamples:
 				break
 				#return data, tempdir
-			dataloc = patientdir + '/' + datafile
+			dataloc = os.path.join(patientdir, datafile)
 			x = np.fromfile(dataloc)
 			if len(x) < npoints:
 				continue
