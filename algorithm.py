@@ -4,10 +4,13 @@ from math import pi as PI
 from random import random, seed
 
 import os
+from os import system
+
+from tempfile import TemporaryDirectory
 
 SAMPLING_RATE = 125
 
-def loadDataSample(nsamples=100, npoints=10000, nperiods=100, seed=42, variation_parm=1):
+def loadDataSample(nsamples=100, npoints=100000, nperiods=100, seed=42, variation_parm=1):
 	"""
 	DESCRIPTION
 	-----------
@@ -32,42 +35,76 @@ def loadDataSample(nsamples=100, npoints=10000, nperiods=100, seed=42, variation
 
 	"""
 
-	seed(42)
+	# seed(42)
 
 	t = np.linspace(0, nperiods * PI, npoints)
 	x = np.array([np.sin(t) + variation_parm * 0.01 * (random() - 0.5) for _ in range(nsamples)])
 	return x	
 
 
-def loadData():
+def loadData(tempdir=None, nsamples=100, npoints=100000):
 	"""
 	# Ethan 
 
 	DESCRIPTION
 	-----------
-	# https://github.com/CVxTz/ECG_Heartbeat_Classification
-	# https://www.physionet.org/content/ptbdb/1.0.0/
+	This function will download approximately 1.7 G in a temporary directory. I used the following logic when creating this function in order to ensure reproducibility. 
+
 	# 1. create temp directory (tempfile)
 	# 2. download data from url to temp file
-	# --- os.system(command) # https://www.askpython.com/python-modules/python-system-command
-	# --- wget -r -N -c -np https://physionet.org/files/ptbdb/1.0.0/
+	# --- command = wget -r -N -c -np https://physionet.org/files/ptbdb/1.0.0/
+	# --- use os.system(command)
 	# 3. return temp file name
 	# 4. open and read the contents of the downloaded file
-	# 5. preprocessData(data)
+	# 5. append to numpy array
 
 	PARAMETERS
 	----------
-	
-
+	tempdir: str (default=None)
+		Path to temporary directory storing the data downloaded by this function. If not provided, the data will be redownloaded in a separate temporary directory. If this recently ran and the temporary directory file path is saved, pass it in as this argument. 
+	nsamples: int (default=100)
+		Number of samples to use at most from the downloaded data.
+	npoitnts:
+		Number of points to use for each sample. Samples with less points than this value will be excluded.
 	RETURNS
 	-------
-	
+	data:	
+		Numpy ndarray representing the ECG data.
+	tempdir:
+		Path to temporary directory where the data is downloaded.
 	"""
 
-	def loadDataHelper(data):
-		return data
+	# def loadDataHelper(data):
+	# 	return data
 
-	pass
+	data = np.zeros((0, npoints))
+
+	if not tempdir:
+		tempdir = TemporaryDirectory().name
+		system("wget -r -N -c -np -P %s https://physionet.org/files/ptbdb/1.0.0/" % tempdir)
+
+	datadir = tempdir + '/physionet.org/files/ptbdb/1.0.0/'
+
+	if not os.path.isdir(datadir):
+		print("The given temporary directory does not contain the downloaded data. Please rerun the function without providing tempdir as an parameter.")
+		return None, None
+
+	patientfiles = [e for e in os.listdir(datadir) if 'patient' in e]
+
+	for patientfile in patientfiles:
+		patientdir = datadir + '/' + patientfile
+		datafiles = [e for e in os.listdir(patientdir) if '.dat' in e]
+		for datafile in datafiles:
+			if data.shape[0] == nsamples:
+				break
+				#return data, tempdir
+			dataloc = patientdir + '/' + datafile
+			x = np.fromfile(dataloc)
+			if len(x) < npoints:
+				continue
+			data = np.vstack([data, x[0:npoints]])
+
+	return data, tempdir
 
 
 def getSegments(data, n=100, ntrain_ponts=1000, mtest_points=200, seed=42):
@@ -151,7 +188,7 @@ def calcRMSD(x_act, x_pred):
 	pass
 
 
-def score(x_act, x_pred, metric="mse", weight_function):
+def score(x_act, x_pred, metric="mse", weight_function=None):
 	"""
 	DESCRIPTION
 	-----------
@@ -299,9 +336,9 @@ def main():
 
 	# data = loadData()
 	data = loadDataSample()
-	results = runGeneticAlgorithm(data_preprocessed)
+	results = runGeneticAlgorithm(data)
 
 
 if __name__ == "__main__":
-
-	main()
+	pass
+	#main()
