@@ -1,14 +1,18 @@
-import pandas as pd
-import numpy as np
+from importlib import reload
 from math import pi as PI
-from random import random, seed
-
 import os
 from os import system
-
+from random import random, seed
+from sys import platform
 from tempfile import TemporaryDirectory
 
-from sys import platform
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from sys import modules
+# import tensorflow as tf
+from sklearn.preprocessing import StandardScaler
 
 SAMPLING_RATE = 125
 
@@ -44,7 +48,7 @@ def loadDataSample(nsamples=100, npoints=100000, nperiods=100, random_state=42, 
 	return x	
 
 # For Ethan:
-tempdir = '/var/folders/jx/16bfc0jx3cb_ygmzkjfmcyv80000gn/T/tmpxqt_vn83'
+tempdir = '/var/folders/jx/16bfc0jx3cb_ygmzkjfmcyv80000gn/T/tmpvnldi1kk/'
 
 def loadData(tempdir=None, nsamples=100, npoints=100000):
 	"""
@@ -127,11 +131,11 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 	return data, tempdir
 
 
-def getSegments(data, n=100, ntrain_ponts=1000, ntest_points=200, random_state=42):
+def getSegments(data, n=100, ntrain_points=500, ntest_points=20, random_state=42):
 	"""
 	DESCRIPTION
 	-----------
-	Points selected for ntrain_ponts and mtest_points need to be adjacent, but they do not necessarily need to be fetched from the beginning of the file.
+	Points selected for ntrain_points and mtest_points need to be adjacent, but they do not necessarily need to be fetched from the beginning of the file.
 
 	PARAMETERS
 	----------
@@ -147,7 +151,7 @@ def getSegments(data, n=100, ntrain_ponts=1000, ntest_points=200, random_state=4
 	RETURNS
 	-------
 	tuple: 
-		Tuple of samples separated into ntrain_ponts and mtest_points
+		Tuple of samples separated into ntrain_points and mtest_points
 
 	"""
 
@@ -155,21 +159,41 @@ def getSegments(data, n=100, ntrain_ponts=1000, ntest_points=200, random_state=4
 
 	npoints = data.shape[1]
 
-	x_train = np.zeros((0, ntrain_ponts))
+	x_train = np.zeros((0, ntrain_points))
 	x_test = np.zeros((0, ntest_points))
 
-	for i in range(n):
+	data_size = 0
 
-		a = int(random() * (npoints - (ntrain_ponts + ntest_points)))
-		b = a + ntrain_ponts
+	for i in range(n):
+		# TODO: Find a better way to ensure no NaN
+		# while True: 
+		# 	a = int(random() * (npoints - (ntrain_points + ntest_points)))
+		# 	b = a + ntrain_points
+		# 	c = b + ntest_points
+
+		# 	data_train = data[i][a:b]
+		# 	data_test = data[i][b:c]
+
+		# 	if any(np.isnan(data_train)) or any(np.isnan(data_test)):
+		# 		continue
+		# 	break
+		#   data_size += 1
+
+		a = int(random() * (npoints - (ntrain_points + ntest_points)))
+		b = a + ntrain_points
 		c = b + ntest_points
+
 		x_train = np.vstack([x_train, data[i][a:b]])
 		x_test = np.vstack([x_test, data[i][b:c]])
+
+	# TODO: Find a better way to ensure no NaN
+	x_train = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_train])
+	x_test = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_test])
 
 	return x_train, x_test
 
 
-def sparseRepresentation(x_train):
+def sparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alpha=0.01, beta=0.99, epsilon=1e-6, sparsity_coef=1, activity_epochs=300, epochs=30, num_layers=1):
 	"""
 	DESCRIPTION
 	-----------
@@ -185,11 +209,44 @@ def sparseRepresentation(x_train):
 	
 	"""
 
-	# from IsamusModule import buildDictionary
+	from model import Activity, Dictionary, SparseModel, sparsity_loss, dictionary_loss
 
-	x_train_sparse = [buildDictionary(e) for e in x_train]
+	data_size = x_train.shape[0]
+	sample_size = x_train.shape[1]
 
-	pass
+	batch_size = 10
+	num_batches = data_size // batch_size
+	patches_per_img = 20
+	dict_filter_size = sample_size // patches_per_img
+
+	num_filters = 100
+
+	alpha = 0.01 # learning rate
+	beta = .99 # The amount to retain for A and B
+	epsilon = 1e-6
+	sparsity_coef = 1 # sparsity coef
+
+	activity_epochs = 300
+	epochs = 30
+	num_layers = 1
+
+	x_train_ = x_train.reshape([-1, dict_filter_size])
+	x_test_ = x_test.reshape([-1, dict_filter_size]) 
+
+	scaler = StandardScaler()
+	scaler.fit(x_train_)
+
+	x_train_ = scaler.transform(x_train_)
+	x_test_ = scaler.transform(x_test_)
+
+	sparse_activity = Activity(batch_size=batch_size, units=num_filters, alpha=alpha, sparsity_coef=sparsity_coef)
+	sparse_dictionary = Dictionary(units=num_filters, dict_filter_size=dict_filter_size, beta=beta)
+	sparse_model = SparseModel(sparse_activity, sparse_dictionary, batch_size=batch_size, activity_epochs=activity_epochs, dict_filter_size=dict_filter_size, data_size=data_size, num_layers=num_layers)
+	sparse_model.compile(sparsity_loss, dictionary_loss)
+
+	sparse_model.fit(x_train_, epochs=epochs, batch_size=batch_size)
+
+	return None
 
 
 def calcMSE(x_act, x_pred):
