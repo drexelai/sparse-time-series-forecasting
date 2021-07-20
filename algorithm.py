@@ -248,33 +248,7 @@ def sparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alp
 
 	return None
 
-
-def calcMSE(x_act, x_pred):
-	"""
-	DESCRIPTION
-	-----------
-	
-
-	PARAMETERS
-	----------
-	
-
-	RETURNS
-	-------
-	
-	"""
-	return sqrt(sum([(x_act[i] - x_pred[i]) ** 2 for i in range(x_pred)]))
-
-
-def calcMAE(x_act, x_pred):
-	pass
-
-
-def calcRMSD(x_act, x_pred):
-	pass
-
-
-def score(x_act, x_pred, metric="mse", weight_function=None):
+def score(x_pred, sparse_activity, sparse_dictionary):
 	"""
 	DESCRIPTION
 	-----------
@@ -288,14 +262,14 @@ def score(x_act, x_pred, metric="mse", weight_function=None):
 	-------
 	
 	"""
-	assert x_act == x_pred, "[{}] It is expected that x_act [len={}] and x_pred [len={}] are the same length. Currently they are not.".format(__func__, len(x_act), len(x_pred))
-	if metric.lower() == "mse":
-		return calcMSE(x_act, x_pred)
-	if metric.lower() == "mae":
-		pass
-	if metric.lower() == "rmsd":
-		pass
-	return None
+	R = sparse_activity @ sparse_dictionary
+
+	error = (x_pred - R) ** 2
+
+	# sqrt(sum([(x_act[i] - x_pred[i]) ** 2 for i in range(x_pred)]))
+
+	return error 
+
 
 
 def buildModel(input_shape, loss, ):
