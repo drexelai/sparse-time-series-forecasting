@@ -394,7 +394,7 @@ def main():
 
 	# data = loadData()
 	data, tempfir = loadDataSample(tempdir=None)
-	data_segment = getSegments(data, nsamples=100, ntrain_ponts=1000, ntest_points=200)
+	data_segment = getSegments(data, n=100, ntrain_ponts=1000, ntest_points=200)
 	results = runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05)
 
 
