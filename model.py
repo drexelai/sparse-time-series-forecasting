@@ -27,7 +27,7 @@ class Activity(keras.layers.Layer):
         prior_shrink = tf.abs(a) - b
         shrink_positive = tf.clip_by_value(prior_shrink, 0, np.inf)
         sign_a = tf.math.sign(a)
-        a.assign(sign_a * prior_shrink)
+        a.assign(sign_a * shrink_positive)
     def update(self, dictionary, x):
         tf.debugging.assert_all_finite(self.w, 'Check activity weights finite')
         batch_size = x.shape[0]

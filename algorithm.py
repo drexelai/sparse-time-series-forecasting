@@ -6,13 +6,13 @@ from random import random, seed
 from sys import platform
 from tempfile import TemporaryDirectory
 
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sys import modules
 # import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
+from wfdb.io import rdrecord
 
 SAMPLING_RATE = 125
 
@@ -49,6 +49,25 @@ def loadDataSample(nsamples=100, npoints=100000, nperiods=100, random_state=42, 
 
 # For Ethan:
 tempdir = '/var/folders/jx/16bfc0jx3cb_ygmzkjfmcyv80000gn/T/tmpvnldi1kk/'
+
+
+def plotOneSample(dataloc):
+	pass
+
+
+def getDataFiles(tempdir):
+	filenames = []
+	datadir = os.path.join(tempdir, 'physionet.org/files/ptbdb/1.0.0/')
+	patientfiles = [e for e in os.listdir(datadir) if 'patient' in e]
+	for patientfile in patientfiles:
+		patientdir = os.path.join(datadir, patientfile)
+		datafiles = [e for e in os.listdir(patientdir)]
+		datafiles_base = [e.split('.')[0] for e in datafiles if e != 'index.html']
+		for datafile in set(datafiles_base):
+			dataloc = os.path.join(patientdir, datafile)
+			filenames.append(dataloc)
+	return filenames
+
 
 def loadData(tempdir=None, nsamples=100, npoints=100000):
 	"""
@@ -107,31 +126,24 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 			print("Make sure if you are on Windows that you have wsl install. If you are on Mac, please install wget.")
 			return None, None
 
-	datadir = os.path.join(tempdir, 'physionet.org/files/ptbdb/1.0.0/')
-
-	if not os.path.isdir(datadir):
-		print("The given temporary directory does not contain the downloaded data. Please rerun the function without providing tempdir as an parameter.")
-		return None, None
-
-	patientfiles = [e for e in os.listdir(datadir) if 'patient' in e]
-
-	for patientfile in patientfiles:
-		patientdir = os.path.join(datadir, patientfile)
-		datafiles = [e for e in os.listdir(patientdir) if '.dat' in e]
-		for datafile in datafiles:
-			if data.shape[0] == nsamples:
-				break
-				#return data, tempdir
-			dataloc = os.path.join(patientdir, datafile)
-			x = np.fromfile(dataloc)
-			if len(x) < npoints:
-				continue
-			data = np.vstack([data, x[0:npoints]])
+	for dataloc in getDataFiles(tempdir):
+		if data.shape[0] == nsamples:
+			break
+		rec = rdrecord(dataloc, channels=[0])
+		x = rec.p_signal
+		if x is None:
+			x = rec.d_signal
+		if x is None:
+			continue
+		if len(x) < npoints:
+			continue
+		x_t = np.transpose(x)
+		data = np.vstack([data, x_t[:, 0:npoints]])
 
 	return data, tempdir
 
 
-def getSegments(data, n=100, ntrain_points=500, ntest_points=20, random_state=42):
+def getSegments(data, n=100, ntrain_points=50000, ntest_points=100, random_state=42):
 	"""
 	DESCRIPTION
 	-----------
@@ -214,7 +226,7 @@ def sparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alp
 	data_size = x_train.shape[0]
 	sample_size = x_train.shape[1]
 
-	batch_size = 10
+	batch_size = 100
 	num_batches = data_size // batch_size
 	patches_per_img = 20
 	dict_filter_size = sample_size // patches_per_img
@@ -239,6 +251,12 @@ def sparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alp
 	x_train_ = scaler.transform(x_train_)
 	x_test_ = scaler.transform(x_test_)
 
+	print(x_train_.shape)
+	print(batch_size)
+	print(num_filters)
+	print(dict_filter_size)
+	print(activity_epochs)
+
 	sparse_activity = Activity(batch_size=batch_size, units=num_filters, alpha=alpha, sparsity_coef=sparsity_coef)
 	sparse_dictionary = Dictionary(units=num_filters, dict_filter_size=dict_filter_size, beta=beta)
 	sparse_model = SparseModel(sparse_activity, sparse_dictionary, batch_size=batch_size, activity_epochs=activity_epochs, dict_filter_size=dict_filter_size, data_size=data_size, num_layers=num_layers)
@@ -247,6 +265,7 @@ def sparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alp
 	sparse_model.fit(x_train_, epochs=epochs, batch_size=batch_size)
 
 	return None
+
 
 def score(x_pred, sparse_activity, sparse_dictionary):
 	"""
