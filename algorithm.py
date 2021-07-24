@@ -333,7 +333,7 @@ def buildModel(inputs, output_size, neurons, activ_func=activation_function, dro
 
 
 
-def predictForecast(x_train, x_test, weights=None):
+def predictForecast(x_train, weights=None):
 	"""
 	DESCRIPTION
 	-----------
