@@ -291,7 +291,7 @@ def score(x_pred, sparse_activity, sparse_dictionary):
 
 
 
-def buildModel(input_shape, loss, ):
+def buildModel(inputs, output_size, neurons, activ_func=activation_function, dropout=dropout, loss=loss, optimizer=optimizer):
 	"""
 	DESCRIPTION
 	-----------
@@ -299,16 +299,38 @@ def buildModel(input_shape, loss, ):
 
 	PARAMETERS
 	----------
-	
+	inputs: input data as an array
+
+	n_outputs: number of predictions we want per sample
+
+	neurons: number of neurons in the LSTM layer
+
+	activ_func: activation function (e.g. tanh, sigmoid, etc.)
+
+	dropout: value for the Dropout Layer
+
+	optimizer: type of optimizer to use for model (e.g adam, rmsprop, etc.)
 
 	RETURNS
 	-------
+	A compiled LSTM model and model summary (optional)
 	
 	"""
 
-	model = None # input_shape
+	model = Sequential()
+  	model.add(LSTM(neurons, return_sequences=True, input_shape=(inputs.shape[1], inputs.shape[2]), activation=activ_func))
+  	model.add(Dropout(dropout))
+  	model.add(LSTM(neurons, return_sequences=True, activation=activ_func))
+  	model.add(Dropout(dropout))
+  	model.add(LSTM(neurons, activation=activ_func))
+  	model.add(Dropout(dropout))
+  	model.add(Dense(units=output_size))
+  	model.add(Activation(activ_func))
+  	model.compile(loss=loss, optimizer=optimizer, metrics=['mae'])
+  	model.summary()
 
-	pass
+  	return model
+
 
 
 def predictForecast(x_train, weights=None):
@@ -333,8 +355,11 @@ def predictForecast(x_train, weights=None):
 	model.train(x_train)
 
 	x_test = model.predict()
+	
+	model.save_weights('LSTM_pred_weights.h5')
 
-	weights = None
+	weights = model.load_weights('LSTM_pred_weights.h5')
+
 
 	return x_test, weights
 
