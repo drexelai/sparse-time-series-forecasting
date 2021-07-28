@@ -1,0 +1,2 @@
+model_checkpoint_path: "sparse_weights"
+all_model_checkpoint_paths: "sparse_weights"

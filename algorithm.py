@@ -3,18 +3,22 @@ from math import pi as PI
 import os
 from os import system
 from random import random, seed
-from sys import platform
+from sys import platform, modules
 from tempfile import TemporaryDirectory
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sys import modules
-# import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
+import tensorflow as tf
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import LSTM, Dropout, Activation, Dense, Embedding
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.optimizers import Adam
 from wfdb.io import rdrecord
+from sklearn.model_selection import KFold
 
-SAMPLING_RATE = 125
+from model import Activity, Dictionary, SparseModel, sparsity_loss, dictionary_loss
 
 def loadDataSample(nsamples=100, npoints=100000, nperiods=100, random_state=42, variation_parm=1):
 	"""
@@ -47,9 +51,6 @@ def loadDataSample(nsamples=100, npoints=100000, nperiods=100, random_state=42, 
 	x = np.array([np.sin(t) + variation_parm * 0.01 * (random() - 0.5) for _ in range(nsamples)])
 	return x	
 
-# For Ethan:
-tempdir = '/var/folders/jx/16bfc0jx3cb_ygmzkjfmcyv80000gn/T/tmpvnldi1kk/'
-
 
 def plotOneSample(dataloc):
 	pass
@@ -69,7 +70,7 @@ def getDataFiles(tempdir):
 	return filenames
 
 
-def loadData(tempdir=None, nsamples=100, npoints=100000):
+def loadData(tempdir=None, npatients=500, npoints=100000):
 	"""
 	# Ethan 
 
@@ -94,7 +95,7 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 	----------
 	tempdir: str (default=None)
 		Path to temporary directory storing the data downloaded by this function. If not provided, the data will be redownloaded in a separate temporary directory. If this recently ran and the temporary directory file path is saved, pass it in as this argument. 
-	nsamples: int (default=100)
+	npatients: int (default=100)
 		Number of samples to use at most from the downloaded data.
 	npoitnts:
 		Number of points to use for each sample. Samples with less points than this value will be excluded.
@@ -127,7 +128,7 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 			return None, None
 
 	for dataloc in getDataFiles(tempdir):
-		if data.shape[0] == nsamples:
+		if data.shape[0] == npatients:
 			break
 		rec = rdrecord(dataloc, channels=[0])
 		x = rec.p_signal
@@ -143,7 +144,7 @@ def loadData(tempdir=None, nsamples=100, npoints=100000):
 	return data, tempdir
 
 
-def getSegments(data, n=100, ntrain_points=50000, ntest_points=100, random_state=42):
+def getSegments(data, npatients=500, ntrain_points=64000, ntest_points=128, nsamples_per_patient=100, random_state=42):
 	"""
 	DESCRIPTION
 	-----------
@@ -153,7 +154,7 @@ def getSegments(data, n=100, ntrain_points=50000, ntest_points=100, random_state
 	----------
 	data: (after preprocessed/selected)
 
-	n: number of random samples to choose from data
+	nsamples: number of random samples to choose from data
 
 	ntrain_points: int
 		Number of points in training set
@@ -176,7 +177,7 @@ def getSegments(data, n=100, ntrain_points=50000, ntest_points=100, random_state
 
 	data_size = 0
 
-	for i in range(n):
+	for i in range(npatients):
 		# TODO: Find a better way to ensure no NaN
 		# while True: 
 		# 	a = int(random() * (npoints - (ntrain_points + ntest_points)))
@@ -189,14 +190,14 @@ def getSegments(data, n=100, ntrain_points=50000, ntest_points=100, random_state
 		# 	if any(np.isnan(data_train)) or any(np.isnan(data_test)):
 		# 		continue
 		# 	break
-		#   data_size += 1
+		# data_size += 1
+		for _ in range(nsamples_per_patient):
+			a = int(random() * (npoints - (ntrain_points + ntest_points)))
+			b = a + ntrain_points
+			c = b + ntest_points
 
-		a = int(random() * (npoints - (ntrain_points + ntest_points)))
-		b = a + ntrain_points
-		c = b + ntest_points
-
-		x_train = np.vstack([x_train, data[i][a:b]])
-		x_test = np.vstack([x_test, data[i][b:c]])
+			x_train = np.vstack([x_train, data[i][a:b]])
+			x_test = np.vstack([x_test, data[i][b:c]])
 
 	# TODO: Find a better way to ensure no NaN
 	x_train = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_train])
@@ -205,7 +206,7 @@ def getSegments(data, n=100, ntrain_points=50000, ntest_points=100, random_state
 	return x_train, x_test
 
 
-def sparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alpha=0.01, beta=0.99, epsilon=1e-6, sparsity_coef=1, activity_epochs=300, epochs=30, num_layers=1):
+def getSparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alpha=0.01, beta=0.99, epsilon=1e-6, sparsity_coef=1, activity_epochs=300, epochs=30, num_layers=1, verbose=False, save=True):
 	"""
 	DESCRIPTION
 	-----------
@@ -221,14 +222,11 @@ def sparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alp
 	
 	"""
 
-	from model import Activity, Dictionary, SparseModel, sparsity_loss, dictionary_loss
-
 	data_size = x_train.shape[0]
 	sample_size = x_train.shape[1]
 
-	batch_size = 100
-	num_batches = data_size // batch_size
-	patches_per_img = 20
+	batch_size = 250
+	patches_per_img = 2000
 	dict_filter_size = sample_size // patches_per_img
 
 	num_filters = 100
@@ -242,29 +240,46 @@ def sparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alp
 	epochs = 30
 	num_layers = 1
 
+	# Add early stopping 
+
 	x_train_ = x_train.reshape([-1, dict_filter_size])
-	x_test_ = x_test.reshape([-1, dict_filter_size]) 
+	# x_test_ = x_test.reshape([-1, dict_filter_size]) 
 
 	scaler = StandardScaler()
 	scaler.fit(x_train_)
 
 	x_train_ = scaler.transform(x_train_)
-	x_test_ = scaler.transform(x_test_)
+	# x_test_ = scaler.transform(x_test_)
 
-	print(x_train_.shape)
-	print(batch_size)
-	print(num_filters)
-	print(dict_filter_size)
-	print(activity_epochs)
+	callback = EarlyStopping(monitor='dictionary loss', patience=3)
 
 	sparse_activity = Activity(batch_size=batch_size, units=num_filters, alpha=alpha, sparsity_coef=sparsity_coef)
 	sparse_dictionary = Dictionary(units=num_filters, dict_filter_size=dict_filter_size, beta=beta)
 	sparse_model = SparseModel(sparse_activity, sparse_dictionary, batch_size=batch_size, activity_epochs=activity_epochs, dict_filter_size=dict_filter_size, data_size=data_size, num_layers=num_layers)
 	sparse_model.compile(sparsity_loss, dictionary_loss)
 
-	sparse_model.fit(x_train_, epochs=epochs, batch_size=batch_size)
+	history = sparse_model.fit(x_train_, epochs=epochs, batch_size=batch_size, callbacks=[callback])
 
-	return None
+	if verbose:
+		# sparse_model.summary()
+		plotSparseReconstruction(sparse_model, num_filters)
+
+	if save:
+		try:
+			sparse_model.save_weights('sparse_weights.h5')
+		except:
+			print("Saving?")
+
+	return sparse_model.dictionary.w
+
+
+# def plotSparseReconstruction(sparse_model, num_filters=100, num_cols=10):
+# 	fig = plt.figure(figsize=(20, 20))
+# 	gs = fig.add_gridspec(num_filters // num_cols, num_cols, hspace=0, wspace=0)
+# 	axs = gs.subplots(sharex='col', sharey='row')
+# 	for i in range(num_filters):
+# 		axs[i // num_cols][i % num_cols].imshow(tf.reshape(sparse_model.dictionary.w[:, i], shape=[32,1]))
+# 	plt.show()
 
 
 def score(x_pred, sparse_activity, sparse_dictionary):
@@ -291,7 +306,7 @@ def score(x_pred, sparse_activity, sparse_dictionary):
 
 
 
-def buildModel(inputs, output_size, neurons, activ_func=activation_function, dropout=dropout, loss=loss, optimizer=optimizer):
+def buildModel(x_train, output_size, neurons=100, activ_func="relu", dropout=0.5, loss="mse", verbose=False):
 	"""
 	DESCRIPTION
 	-----------
@@ -316,24 +331,20 @@ def buildModel(inputs, output_size, neurons, activ_func=activation_function, dro
 	A compiled LSTM model and model summary (optional)
 	
 	"""
-
 	model = Sequential()
-  	model.add(LSTM(neurons, return_sequences=True, input_shape=(inputs.shape[1], inputs.shape[2]), activation=activ_func))
-  	model.add(Dropout(dropout))
-  	model.add(LSTM(neurons, return_sequences=True, activation=activ_func))
-  	model.add(Dropout(dropout))
-  	model.add(LSTM(neurons, activation=activ_func))
-  	model.add(Dropout(dropout))
-  	model.add(Dense(units=output_size))
-  	model.add(Activation(activ_func))
-  	model.compile(loss=loss, optimizer=optimizer, metrics=['mae'])
-  	model.summary()
+	model.add(LSTM(neurons, input_shape=(x_train.shape[1:]), activation=activ_func))
+	model.add(Dense(units=output_size))
 
-  	return model
+	model.compile(loss=loss, optimizer=Adam(learning_rate=0.01), metrics=['mae'])
+
+	if verbose:
+		model.summary()
+
+	return model
 
 
 
-def predictForecast(x_train, weights=None):
+def predictForecast(x_train, y_train, x_test, weights=None, epochs=300, batch_size=10, verbose=False, save=True):
 	"""
 	DESCRIPTION
 	-----------
@@ -350,18 +361,35 @@ def predictForecast(x_train, weights=None):
 
 	# Randomize those weights some how
 
-	model = buildModel(x_train.shape)
+	scaler = StandardScaler()
+	scaler.fit(x_train)
 
-	model.train(x_train)
+	x_train_ = scaler.transform(x_train)
+	y_train_ = scaler.transform(y_train)
+	x_test_ = scaler.transform(x_test)
 
-	x_test = model.predict()
+	x_train_ = x_train_.reshape((x_train_.shape[0], 1, x_train_.shape[1]))
+	y_train_ = y_train_.reshape((y_train_.shape[0], 1, y_train_.shape[1]))
+	x_test_ = x_test_.reshape((x_test_.shape[0], 1, x_test_.shape[1]))
+
+	model = buildModel(x_train_, y_train_.shape[2])
+
+	if weights:
+		model.layers[0].set_weights(weights)
+
+	callback = EarlyStopping(monitor='loss', patience=3)
+
+	history = model.fit(x_train_, y_train_, epochs=epochs, batch_size=batch_size, callbacks=[callback])
+
+	x_test_pred = model.predict(x_test_)
 	
-	model.save_weights('LSTM_pred_weights.h5')
+	weights = model.layers[0].get_weights()
 
-	weights = model.load_weights('LSTM_pred_weights.h5')
+	if save:
+		# np.savefile(weights)
+		pass
 
-
-	return x_test, weights
+	return x_test_pred, weights
 
 
 def runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05):
@@ -379,13 +407,13 @@ def runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05):
 	
 	"""
 
-	x_train_sparse = sparseRepresentation(x_train)
-
+	sparse_dictionary = getSparseRepresentation(x_train)
+	
 	weights = None
 
 	ntop_weights = int(nchildren * alpha)
 
-	for epoch in range(nepochs):
+	for train_index, test_index in kf.split(X):
 
 		child_weights = []
 		child_scores = []
@@ -436,9 +464,10 @@ def main():
 	
 	"""
 
-	# data = loadData()
-	data, tempfir = loadDataSample(tempdir=None)
-	data_segment = getSegments(data, nsamples=100, ntrain_ponts=1000, ntest_points=200)
+	tempdir = '/Users/ethanmoyer/Projects/drexelai/data/sparse-time-series-forecasting'
+
+	data, tempfir = loadData(tempdir=tempdir, npatients=50)
+	x_train, x_test = getSegments(data, npatients=50, nsamples_per_patient=1)
 	results = runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05)
 
 
