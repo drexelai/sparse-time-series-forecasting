@@ -2,7 +2,7 @@ from importlib import reload
 from math import pi as PI
 import os
 from os import system
-from random import random, seed
+from random import random, seed, sample
 from sys import platform, modules
 from tempfile import TemporaryDirectory
 
@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import KFold
 import tensorflow as tf
 from tensorflow.keras import Sequential
 from tensorflow.keras.layers import LSTM, Dropout, Activation, Dense, Embedding
@@ -72,8 +73,6 @@ def getDataFiles(tempdir):
 
 def loadData(tempdir=None, npatients=500, npoints=100000):
 	"""
-	# Ethan 
-
 	DESCRIPTION
 	-----------
 	This function will download approximately 1.7 G in a temporary directory. I used the following logic when creating this function in order to ensure reproducibility. 
@@ -144,7 +143,7 @@ def loadData(tempdir=None, npatients=500, npoints=100000):
 	return data, tempdir
 
 
-def getSegments(data, npatients=500, ntrain_points=64000, ntest_points=128, nsamples_per_patient=100, random_state=42):
+def getSegments(data, npatients=500, nfeature_points=64000, ntarget_points=128, nsamples_per_patient=100, random_state=42):
 	"""
 	DESCRIPTION
 	-----------
@@ -172,41 +171,28 @@ def getSegments(data, npatients=500, ntrain_points=64000, ntest_points=128, nsam
 
 	npoints = data.shape[1]
 
-	x_train = np.zeros((0, ntrain_points))
-	x_test = np.zeros((0, ntest_points))
-
-	data_size = 0
+	X = np.zeros((0, nfeature_points))
+	y = np.zeros((0, ntarget_points))
 
 	for i in range(npatients):
-		# TODO: Find a better way to ensure no NaN
-		# while True: 
-		# 	a = int(random() * (npoints - (ntrain_points + ntest_points)))
-		# 	b = a + ntrain_points
-		# 	c = b + ntest_points
-
-		# 	data_train = data[i][a:b]
-		# 	data_test = data[i][b:c]
-
-		# 	if any(np.isnan(data_train)) or any(np.isnan(data_test)):
-		# 		continue
-		# 	break
-		# data_size += 1
 		for _ in range(nsamples_per_patient):
-			a = int(random() * (npoints - (ntrain_points + ntest_points)))
-			b = a + ntrain_points
-			c = b + ntest_points
+			a = int(random() * (npoints - (nfeature_points + ntarget_points)))
+			b = a + nfeature_points
+			c = b + ntarget_points
 
-			x_train = np.vstack([x_train, data[i][a:b]])
-			x_test = np.vstack([x_test, data[i][b:c]])
+			X = np.vstack([X, data[i][a:b]])
+			y = np.vstack([y, data[i][b:c]])
 
-	# TODO: Find a better way to ensure no NaN
-	x_train = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_train])
-	x_test = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_test])
+	# x_train = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_train])
+	# y_train = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in y_train])
 
-	return x_train, x_test
+	# x_test = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_test])
+	# y_test = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in y_test])
+
+	return X, y
 
 
-def getSparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, alpha=0.01, beta=0.99, epsilon=1e-6, sparsity_coef=1, activity_epochs=300, epochs=30, num_layers=1, verbose=False, save=True):
+def getSparseRepresentation(X, batch_size=200, num_filters=100, patches_per_img=50, alpha=0.01, beta=0.99, epsilon=1e-6, sparsity_coef=1, activity_epochs=300, epochs=30, num_layers=1, verbose=False, save=True):
 	"""
 	DESCRIPTION
 	-----------
@@ -222,43 +208,26 @@ def getSparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, 
 	
 	"""
 
-	data_size = x_train.shape[0]
-	sample_size = x_train.shape[1]
+	data_size = X.shape[0]
+	sample_size = X.shape[1]
 
-	batch_size = 250
-	patches_per_img = 2000
-	dict_filter_size = sample_size // patches_per_img
+	dict_filter_size = 32
 
-	num_filters = 100
-
-	alpha = 0.01 # learning rate
-	beta = .99 # The amount to retain for A and B
-	epsilon = 1e-6
-	sparsity_coef = 1 # sparsity coef
-
-	activity_epochs = 300
-	epochs = 30
-	num_layers = 1
-
-	# Add early stopping 
-
-	x_train_ = x_train.reshape([-1, dict_filter_size])
-	# x_test_ = x_test.reshape([-1, dict_filter_size]) 
+	X_ = X.reshape([-1, dict_filter_size])
 
 	scaler = StandardScaler()
-	scaler.fit(x_train_)
+	scaler.fit(X_)
 
-	x_train_ = scaler.transform(x_train_)
-	# x_test_ = scaler.transform(x_test_)
+	X_ = scaler.transform(X_)
 
 	callback = EarlyStopping(monitor='dictionary loss', patience=3)
 
-	sparse_activity = Activity(batch_size=batch_size, units=num_filters, alpha=alpha, sparsity_coef=sparsity_coef)
-	sparse_dictionary = Dictionary(units=num_filters, dict_filter_size=dict_filter_size, beta=beta)
-	sparse_model = SparseModel(sparse_activity, sparse_dictionary, batch_size=batch_size, activity_epochs=activity_epochs, dict_filter_size=dict_filter_size, data_size=data_size, num_layers=num_layers)
+	sparse_activity_obj = Activity(batch_size=batch_size, units=num_filters, alpha=alpha, sparsity_coef=sparsity_coef)
+	sparse_dictionary_obj = Dictionary(units=num_filters, dict_filter_size=dict_filter_size, beta=beta)
+	sparse_model = SparseModel(sparse_activity_obj, sparse_dictionary_obj, batch_size=batch_size, activity_epochs=activity_epochs, dict_filter_size=dict_filter_size, data_size=data_size, num_layers=num_layers)
 	sparse_model.compile(sparsity_loss, dictionary_loss)
 
-	history = sparse_model.fit(x_train_, epochs=epochs, batch_size=batch_size, callbacks=[callback])
+	history = sparse_model.fit(X_, epochs=epochs, batch_size=batch_size, callbacks=[callback])
 
 	if verbose:
 		# sparse_model.summary()
@@ -270,9 +239,10 @@ def getSparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, 
 		except:
 			print("Saving?")
 
-	return sparse_model.dictionary.w
+	return sparse_model
 
 
+# TODO: find a better way to visualize the dictionary
 # def plotSparseReconstruction(sparse_model, num_filters=100, num_cols=10):
 # 	fig = plt.figure(figsize=(20, 20))
 # 	gs = fig.add_gridspec(num_filters // num_cols, num_cols, hspace=0, wspace=0)
@@ -282,7 +252,7 @@ def getSparseRepresentation(x_train, x_test, batch_size=10, patches_per_img=50, 
 # 	plt.show()
 
 
-def score(x_pred, sparse_activity, sparse_dictionary):
+def score(y_pred, sparse_model):
 	"""
 	DESCRIPTION
 	-----------
@@ -296,9 +266,16 @@ def score(x_pred, sparse_activity, sparse_dictionary):
 	-------
 	
 	"""
-	R = sparse_activity @ sparse_dictionary
 
-	error = (x_pred - R) ** 2
+	y_pred_reconstruction = sparse_model.call(y_pred)
+
+	nsamples = len(y_pred)
+
+	sparse_activity = sparse_model.activity.w[:nsamples, :]
+
+	np.mean([e for e in sparse_activity])
+
+	# R = sparse_activity @ tf.transpose(sparse_dictionary)
 
 	# sqrt(sum([(x_act[i] - x_pred[i]) ** 2 for i in range(x_pred)]))
 
@@ -344,7 +321,7 @@ def buildModel(x_train, output_size, neurons=100, activ_func="relu", dropout=0.5
 
 
 
-def predictForecast(x_train, y_train, x_test, weights=None, epochs=300, batch_size=10, verbose=False, save=True):
+def predictForecast(X_train, y_train, X_test, weights=None, epochs=300, batch_size=10, verbose=False, save=True):
 	"""
 	DESCRIPTION
 	-----------
@@ -362,26 +339,24 @@ def predictForecast(x_train, y_train, x_test, weights=None, epochs=300, batch_si
 	# Randomize those weights some how
 
 	scaler = StandardScaler()
-	scaler.fit(x_train)
+	scaler.fit(X_train)
 
-	x_train_ = scaler.transform(x_train)
-	y_train_ = scaler.transform(y_train)
-	x_test_ = scaler.transform(x_test)
+	X_train_ = scaler.transform(X_train)
+	X_test_ = scaler.transform(X_test)
 
-	x_train_ = x_train_.reshape((x_train_.shape[0], 1, x_train_.shape[1]))
-	y_train_ = y_train_.reshape((y_train_.shape[0], 1, y_train_.shape[1]))
-	x_test_ = x_test_.reshape((x_test_.shape[0], 1, x_test_.shape[1]))
+	X_train_ = X_train_.reshape((X_train_.shape[0], 1, X_train_.shape[1]))
+	X_test_ = X_test_.reshape((X_test_.shape[0], 1, X_test_.shape[1]))
 
-	model = buildModel(x_train_, y_train_.shape[2])
+	model = buildModel(X_train_, y_train.shape[1])
 
 	if weights:
 		model.layers[0].set_weights(weights)
 
 	callback = EarlyStopping(monitor='loss', patience=3)
 
-	history = model.fit(x_train_, y_train_, epochs=epochs, batch_size=batch_size, callbacks=[callback])
+	history = model.fit(X_train_, y_train, epochs=epochs, batch_size=batch_size, callbacks=[callback])
 
-	x_test_pred = model.predict(x_test_)
+	y_pred = model.predict(X_test_)
 	
 	weights = model.layers[0].get_weights()
 
@@ -389,10 +364,10 @@ def predictForecast(x_train, y_train, x_test, weights=None, epochs=300, batch_si
 		# np.savefile(weights)
 		pass
 
-	return x_test_pred, weights
+	return y_pred, weights
 
 
-def runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05):
+def runGeneticAlgorithm(X, y, ngenerations=10, nchildren=100, nepochs=200, alpha=0.05):
 	"""
 	DESCRIPTION
 	-----------
@@ -407,37 +382,34 @@ def runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05):
 	
 	"""
 
-	sparse_dictionary = getSparseRepresentation(x_train)
+	sparse_model = getSparseRepresentation(X)
 	
 	weights = None
 
 	ntop_weights = int(nchildren * alpha)
 
+	kf = KFold(ngenerations)
+
 	for train_index, test_index in kf.split(X):
+
+		X_train = X[train_index, ]
+		y_train = y[train_index, ]
+
+		X_test = X[test_index, ]
+		y_test = X[test_index, ]
 
 		child_weights = []
 		child_scores = []
 
-		for child in range(nchildren):
-
-			weight_pred_segments = []
-			scores_pred_segments = []
-
+		for _ in range(nchildren):
 			# Randomize the weights for each child
 			weights_random = None
 
-			for j, data_segment in enumerate(data_segments):
+			y_pred, weights = predictForecast(X_train, y_train, X_test, weights=weights_random)
 
-				x_train = data_segment[0]
-				x_act = data_segment[1]
+			child_weights.append(weights_random)
 
-				x_pred = predictForecast(x_train, weights=weights_random)
-
-				weight_pred_segments.append(weights_random)
-				scores_pred_segments.append(score(x_act, x_pred))
-
-			child_weights.append(weight_pred_segments)
-			child_scores.append(scores_pred_segments)
+			child_scores.append(score(y_pred, sparse_model))
 
 		best_weights = child_weights[np.argsort(np.array([np.mean(child_score) for child_score in child_scores]))[0:ntop_weights]]
 
@@ -467,10 +439,13 @@ def main():
 	tempdir = '/Users/ethanmoyer/Projects/drexelai/data/sparse-time-series-forecasting'
 
 	data, tempfir = loadData(tempdir=tempdir, npatients=50)
-	x_train, x_test = getSegments(data, npatients=50, nsamples_per_patient=1)
-	results = runGeneticAlgorithm(x_train, x_test, nchildren=100, nepochs=20, alpha=0.05)
+	X, y = getSegments(data, npatients=50, nsamples_per_patient=1)
+	results = runGeneticAlgorithm(X, y, nchildren=100, nepochs=20, alpha=0.05)
 
 
 if __name__ == "__main__":
 	pass
 	#main()
+
+
+

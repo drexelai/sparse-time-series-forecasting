@@ -119,6 +119,8 @@ class SparseModel(keras.Model):
     def call(self, patches):
         patches = tf.cast(patches, dtype=tf.float32)
         patches = tf.reshape(patches, [-1, self.dict_filter_size])
+        self.activity.reset()
+
         dictionary = self.dictionary.w
         for _ in range(self.activity_epochs):
             self.activity.update(dictionary, patches)
