@@ -1,10 +1,14 @@
 from importlib import reload
 from math import pi as PI
 import os
-from os import system
+from os import system, getcwd
 from random import random, seed, sample
 from sys import platform, modules
 from tempfile import TemporaryDirectory
+from math import sqrt
+
+from pprint import pprint
+import pickle 
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,8 +20,12 @@ from tensorflow.keras import Sequential
 from tensorflow.keras.layers import LSTM, Dropout, Activation, Dense, Embedding
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.models import load_model
+
 from wfdb.io import rdrecord
 from sklearn.model_selection import KFold
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import r2_score
 
 from model import Activity, Dictionary, SparseModel, sparsity_loss, dictionary_loss
 
@@ -183,16 +191,10 @@ def getSegments(data, npatients=500, nfeature_points=64000, ntarget_points=128, 
 			X = np.vstack([X, data[i][a:b]])
 			y = np.vstack([y, data[i][b:c]])
 
-	# x_train = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_train])
-	# y_train = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in y_train])
-
-	# x_test = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in x_test])
-	# y_test = np.array([np.nan_to_num(e, nan=0, posinf=0, neginf=0) for e in y_test])
-
 	return X, y
 
 
-def getSparseRepresentation(X, batch_size=200, num_filters=100, patches_per_img=50, alpha=0.01, beta=0.99, epsilon=1e-6, sparsity_coef=1, activity_epochs=300, epochs=30, num_layers=1, verbose=False, save=True):
+def getSparseRepresentation(X, batch_size=200, num_filters=100, patches_per_img=50, alpha=0.01, beta=0.99, epsilon=1e-6, sparsity_coef=1, activity_epochs=300, epochs=30, num_layers=1, verbose=False, save=True, sparse_model_filename="sparse_model"):
 	"""
 	DESCRIPTION
 	-----------
@@ -220,6 +222,9 @@ def getSparseRepresentation(X, batch_size=200, num_filters=100, patches_per_img=
 
 	X_ = scaler.transform(X_)
 
+	if os.path.isfile(sparse_model_filename):
+		return load_model(sparse_model_filename)
+
 	callback = EarlyStopping(monitor='dictionary loss', patience=3)
 
 	sparse_activity_obj = Activity(batch_size=batch_size, units=num_filters, alpha=alpha, sparsity_coef=sparsity_coef)
@@ -227,15 +232,16 @@ def getSparseRepresentation(X, batch_size=200, num_filters=100, patches_per_img=
 	sparse_model = SparseModel(sparse_activity_obj, sparse_dictionary_obj, batch_size=batch_size, activity_epochs=activity_epochs, dict_filter_size=dict_filter_size, data_size=data_size, num_layers=num_layers)
 	sparse_model.compile(sparsity_loss, dictionary_loss)
 
-	history = sparse_model.fit(X_, epochs=epochs, batch_size=batch_size, callbacks=[callback])
+	history = sparse_model.fit(X_, epochs=epochs, batch_size=batch_size, callbacks=[callback], verbose=verbose)
 
 	if verbose:
 		# sparse_model.summary()
-		plotSparseReconstruction(sparse_model, num_filters)
+		# plotSparseReconstruction(sparse_model, num_filters)
+		pass
 
 	if save:
 		try:
-			sparse_model.save_weights('sparse_weights.h5')
+			sparse_model.save(filename)
 		except:
 			print("Saving?")
 
@@ -267,20 +273,11 @@ def score(y_pred, sparse_model):
 	
 	"""
 
-	y_pred_reconstruction = sparse_model.call(y_pred)
+	batch_size = 20
 
-	nsamples = len(y_pred)
+	y_pred = y_pred.reshape((batch_size, 32))
 
-	sparse_activity = sparse_model.activity.w[:nsamples, :]
-
-	np.mean([e for e in sparse_activity])
-
-	# R = sparse_activity @ tf.transpose(sparse_dictionary)
-
-	# sqrt(sum([(x_act[i] - x_pred[i]) ** 2 for i in range(x_pred)]))
-
-	return error 
-
+	return dictionary_loss(sparse_model.dictionary.w, sparse_model.activity.w[:batch_size], y_pred).numpy()
 
 
 def buildModel(x_train, output_size, neurons=100, activ_func="relu", dropout=0.5, loss="mse", verbose=False):
@@ -321,7 +318,7 @@ def buildModel(x_train, output_size, neurons=100, activ_func="relu", dropout=0.5
 
 
 
-def predictForecast(X_train, y_train, X_test, weights=None, epochs=300, batch_size=10, verbose=False, save=True):
+def predictForecast(X_train, y_train, X_test, weights=None, epochs=300, batch_size=10, verbose=False, save=True, fit=True):
 	"""
 	DESCRIPTION
 	-----------
@@ -354,7 +351,7 @@ def predictForecast(X_train, y_train, X_test, weights=None, epochs=300, batch_si
 
 	callback = EarlyStopping(monitor='loss', patience=3)
 
-	history = model.fit(X_train_, y_train, epochs=epochs, batch_size=batch_size, callbacks=[callback])
+	history = model.fit(X_train_, y_train, epochs=epochs, batch_size=batch_size, callbacks=[callback], verbose=verbose)
 
 	y_pred = model.predict(X_test_)
 	
@@ -367,7 +364,7 @@ def predictForecast(X_train, y_train, X_test, weights=None, epochs=300, batch_si
 	return y_pred, weights
 
 
-def runGeneticAlgorithm(X, y, ngenerations=10, nchildren=100, nepochs=200, alpha=0.05):
+def runGeneticAlgorithm(X, y, ngenerations=10, nchildren=25, verbose=False):
 	"""
 	DESCRIPTION
 	-----------
@@ -382,15 +379,16 @@ def runGeneticAlgorithm(X, y, ngenerations=10, nchildren=100, nepochs=200, alpha
 	
 	"""
 
-	sparse_model = getSparseRepresentation(X)
+	sparse_model = getSparseRepresentation(X, verbose=verbose)
 	
-	weights = None
-
-	ntop_weights = int(nchildren * alpha)
+	new_weights = None
+	original_weights = None
 
 	kf = KFold(ngenerations)
 
+	generation = 0
 	for train_index, test_index in kf.split(X):
+		print(f"Generation: {generation}")
 
 		X_train = X[train_index, ]
 		y_train = y[train_index, ]
@@ -401,24 +399,65 @@ def runGeneticAlgorithm(X, y, ngenerations=10, nchildren=100, nepochs=200, alpha
 		child_weights = []
 		child_scores = []
 
-		for _ in range(nchildren):
+		for i in range(nchildren):
+			print(f"Child: {i}")
 			# Randomize the weights for each child
-			weights_random = None
+			weights_random = new_weights
 
-			y_pred, weights = predictForecast(X_train, y_train, X_test, weights=weights_random)
+			y_pred, weights = predictForecast(X_train, y_train, X_test, weights=weights_random, verbose=verbose)
 
-			child_weights.append(weights_random)
+			child_weights.append(weights)
 
 			child_scores.append(score(y_pred, sparse_model))
 
-		best_weights = child_weights[np.argsort(np.array([np.mean(child_score) for child_score in child_scores]))[0:ntop_weights]]
+		best_score_indx = np.argsort(child_scores)[0]
 
-		# Use top weights to create new weights
+		print(f"Best Score for generation number {generation}: {np.min(child_scores)}")
 
-		# After each epoch create weights
-		weights = None
+		new_weights = child_weights[best_score_indx]
+		if generation == 0:
+			original_weights = weights
 
-		return weights
+		generation += 1
+
+	return original_weights, new_weights
+
+
+def getResults(original_weights, new_weights, X_test, y_test):
+
+	# Evaluate the original weights 
+	scaler = StandardScaler()
+	scaler.fit(X_test)
+	X_test_ = scaler.transform(X_test)
+	X_test_ = X_test_.reshape((X_test_.shape[0], 1, X_test_.shape[1]))
+
+	model = buildModel(X_test_, y_test.shape[1])
+	model.layers[0].set_weights(original)
+
+	y_pred_original = model.predict(X_test_)
+
+	# Evaluate the new weights
+	scaler = StandardScaler()
+	scaler.fit(X_test)
+	X_test_ = scaler.transform(X_test)
+	X_test_ = X_test_.reshape((X_test_.shape[0], 1, X_test_.shape[1]))
+
+	model = buildModel(X_test_, y_test.shape[1])
+	model.layers[0].set_weights(original)
+
+	y_pred_new = model.predict(X_test_)
+
+	output = {"original_weights": {
+		"rmse": sqrt(mean_squared_error(y_pred_original, y_test)),
+		"r2": r2_score(y_pred_original, y_test)
+	}, 
+	"new_weights": {
+		"rmse": sqrt(mean_squared_error(y_pred_new, y_test)),
+		"r2": r2_score(y_pred_new, y_test)
+	}}
+
+	return output
+
 
 
 def main():
@@ -436,16 +475,45 @@ def main():
 	
 	"""
 
+	# TODO: only set and use tempdir in this way when data has been downloaded using loadData into a temp directory and moved to this defined location
 	tempdir = '/Users/ethanmoyer/Projects/drexelai/data/sparse-time-series-forecasting'
 
+	print("Collecting data ...")
 	data, tempfir = loadData(tempdir=tempdir, npatients=50)
-	X, y = getSegments(data, npatients=50, nsamples_per_patient=1)
-	results = runGeneticAlgorithm(X, y, nchildren=100, nepochs=20, alpha=0.05)
+	print("Segmenting data ...")
+	X, y = getSegments(data, npatients=50, nsamples_per_patient=10)
+	print("Running algorithm ...")
 
+	nfolds = 10
+	kf = KFold(nfolds)
+
+	results = []
+
+	ifold = 0
+	for train_index, test_index in kf.split(X):
+		print(f"Running fold {ifold} of {nfolds} ...")
+
+		X_train = X[train_index, ]
+		y_train = y[train_index, ]
+
+		X_test = X[test_index, ]
+		y_test = X[test_index, ]
+
+		original_weights, new_weights = runGeneticAlgorithm(X_train, y_train, verbose=True)
+		results_ = getResults(original_weights, new_weights, X_test, y_test)
+		pprint(results_)
+		results.append(results_)
+
+	filename = os.path.join(getcwd(), 'results.pickle')
+
+	filehandler = open(filename, 'w') 
+	pickle.dump(results, filehandler)
+
+	return 0
 
 if __name__ == "__main__":
 	pass
-	#main()
+	main()
 
 
 
